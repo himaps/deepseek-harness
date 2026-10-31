@@ -182,4 +182,22 @@ jobs:
       - name: Install and verify
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          bash scripts/verify-deb.sh dist/deepseek-harness-kylin-v10-sp1-aarch64.deb
+          set -o pipefail
+          bash scripts/verify-deb.sh dist/deepseek-harness-kylin-v10-sp1-aarch64.deb 2>&1 | tee verify.log || {
+            grep -v '^[[:space:]]*at ' verify.log | tail -n 10 | sed 's/^/::error::/'
+            {
+              echo '### verify log tail'
+              echo '<pre>'
+              tail -n 150 verify.log
+              echo '</pre>'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 1
+          }
+
+      - name: Upload verify log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: kylin-verify-log
+          path: verify.log
+          if-no-files-found: ignore

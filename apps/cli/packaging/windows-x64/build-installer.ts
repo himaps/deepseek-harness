@@ -226,19 +226,18 @@ function packRemaining(names: readonly string[], workspace: Map<string, string>,
 }
 
 /**
- * Resolve the workspace-pinned pnpm entry script. Child spawns cannot execute the
- * `pnpm` shim on Windows without a shell, so the packaged pnpm module runs under the
- * current Node.js executable instead.
- * @returns Absolute path of pnpm's `bin/pnpm.cjs`.
+ * Resolve the pnpm entry script this build was launched through. Child spawns cannot
+ * execute the `pnpm` shim on Windows without a shell, and pnpm's `exports` map does not
+ * expose its package.json for resolution, so the lifecycle-provided `npm_execpath` — the
+ * same value the release pack helpers use — is the one reliable handle.
+ * @returns Absolute path of the pnpm entry script.
  */
 function pnpmEntry(): string {
-  const manifest = createRequire(import.meta.url).resolve('pnpm/package.json')
-  const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { bin?: unknown }
-  const bin = typeof parsed.bin === 'object' && parsed.bin !== null && !Array.isArray(parsed.bin)
-    ? parsed.bin.pnpm
-    : undefined
-  if (typeof bin !== 'string') throw new Error('windows installer: pnpm has no bin entry')
-  return join(dirname(manifest), bin)
+  const entrypoint = process.env.npm_execpath
+  if (entrypoint === undefined || entrypoint === '') {
+    throw new Error('windows installer: npm_execpath is unavailable; run this script through pnpm.')
+  }
+  return resolve(entrypoint)
 }
 
 /**
