@@ -59,17 +59,20 @@ jobs:
       - name: Build official artifacts
         run: pnpm run build:official
 
-      # NSIS is installed on the runner image but not on PATH; the packaging script
-      # resolves makensis through PATH.
+      # NSIS is neither on PATH nor guaranteed at the default directory on this image;
+      # fall back to installing it with Chocolatey. GITHUB_PATH carries the location to
+      # the later steps that resolve makensis through PATH.
       - name: Locate NSIS
         run: |
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-            $nsis = 'C:\Program Files (x86)\NSIS'
-            if (Test-Path (Join-Path $nsis 'makensis.exe')) {
-              Add-Content $env:GITHUB_PATH $nsis
-            } else {
-              Write-Error 'NSIS 3 not found on this runner'
+            $found = 'C:\Program Files (x86)\NSIS', 'C:\Program Files\NSIS' |
+              Where-Object { Test-Path (Join-Path $_ 'makensis.exe') } |
+              Select-Object -First 1
+            if (-not $found) {
+              choco install nsis -y --no-progress
+              $found = 'C:\Program Files (x86)\NSIS'
             }
+            Add-Content $env:GITHUB_PATH $found
           }
 
       # Packs the dsh and vendor release families, prepares the win-x64 primary runtime,
@@ -85,6 +88,10 @@ jobs:
             Tee-Object -FilePath $log
           if ($LASTEXITCODE -ne 0) {
             Get-Content $log -Tail 10 | ForEach-Object { "::error::$_" }
+            "### build-installer log tail" | Add-Content $env:GITHUB_STEP_SUMMARY
+            '<pre>' | Add-Content $env:GITHUB_STEP_SUMMARY
+            Get-Content $log -Tail 200 | Add-Content $env:GITHUB_STEP_SUMMARY
+            '</pre>' | Add-Content $env:GITHUB_STEP_SUMMARY
             exit 1
           }
 

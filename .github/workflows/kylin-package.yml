@@ -91,7 +91,13 @@ jobs:
           mkdir -p dist/kylin/logs
           set -o pipefail
           pnpm run build:official 2>&1 | tee dist/kylin/logs/build-official.log || {
-            tail -n 10 dist/kylin/logs/build-official.log | sed 's/^/::error::/'
+            grep -v '^[[:space:]]*at ' dist/kylin/logs/build-official.log | tail -n 10 | sed 's/^/::error::/'
+            {
+              echo '### build:official log tail'
+              echo '<pre>'
+              tail -n 150 dist/kylin/logs/build-official.log
+              echo '</pre>'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 1
           }
 
@@ -112,7 +118,13 @@ jobs:
           pnpm exec tsx apps/cli/packaging/linux/kylin-v10-sp1/build-deb.ts \
             --output dist/kylin --work dist/kylin/work --cache dist/kylin/cache --concurrency 4 \
             2>&1 | tee dist/kylin/logs/build-deb.log || {
-            tail -n 10 dist/kylin/logs/build-deb.log | sed 's/^/::error::/'
+            grep -v '^[[:space:]]*at ' dist/kylin/logs/build-deb.log | tail -n 10 | sed 's/^/::error::/'
+            {
+              echo '### build-deb log tail'
+              echo '<pre>'
+              tail -n 150 dist/kylin/logs/build-deb.log
+              echo '</pre>'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 1
           }
 
