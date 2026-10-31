@@ -27,7 +27,7 @@ import { attempt, capture } from '../../../../../scripts/release/process.ts'
 import { packedIdentity } from '../../../../../scripts/release/tarball.ts'
 
 const PACKAGING_DIR = resolve(import.meta.dirname)
-const REPOSITORY_ROOT = resolve(PACKAGING_DIR, '..', '..', '..', '..', '..')
+const REPOSITORY_ROOT = resolve(PACKAGING_DIR, '..', '..', '..', '..')
 const CLI_ROOT = resolve(REPOSITORY_ROOT, 'apps', 'cli')
 const PRIMARY_RUNTIME_LOCK = resolve(REPOSITORY_ROOT, 'scripts', 'primary-runtime', 'lock.json')
 
