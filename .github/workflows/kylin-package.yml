@@ -45,7 +45,8 @@ jobs:
     name: Build offline deb (focal baseline)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
-    container: ${{ inputs.build_image }}
+    # inputs is empty on push events, so every inputs reference needs a fallback.
+    container: ${{ inputs.build_image || 'ubuntu:20.04' }}
     defaults:
       run:
         shell: bash
@@ -129,7 +130,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
-    container: ${{ inputs.verify_image }}
+    container: ${{ inputs.verify_image || 'ubuntu:20.04' }}
     steps:
       - uses: actions/download-artifact@v8.0.1
         with:
