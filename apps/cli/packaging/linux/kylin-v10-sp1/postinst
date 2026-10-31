@@ -1,0 +1,26 @@
+#!/bin/sh
+# deepseek-harness postinst: verify the payload, then schedule the offline dependency
+# closure check after dpkg releases its lock. This script never runs dpkg itself —
+# dpkg holds its lock for the whole transaction and nested invocations corrupt the database.
+set -eu
+
+APP_ROOT=/opt/deepseek-harness
+
+if [ ! -x "$APP_ROOT/runtime/primary-runtime/dependencies/node/bin/node" ] \
+  || [ ! -f "$APP_ROOT/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
+  echo "deepseek-harness: postinst: application payload is missing from $APP_ROOT" >&2
+  echo "deepseek-harness: postinst: the package is broken; reinstall it" >&2
+  exit 1
+fi
+
+if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1; then
+  # Deferred one-shot: dpkg has released its lock by the time it runs. Read the outcome
+  # with `journalctl -u deepseek-harness-deps`.
+  systemd-run --on-active=10 --unit=deepseek-harness-deps \
+    --description="deepseek-harness offline dependency check" \
+    "$APP_ROOT/deps/install-deps.sh" \
+    || echo "deepseek-harness: the deferred dependency check could not be scheduled; run $APP_ROOT/deps/install-deps.sh manually"
+else
+  echo "deepseek-harness: no running systemd detected; to install the bundled dependency closure, run:"
+  echo "  $APP_ROOT/deps/install-deps.sh"
+fi

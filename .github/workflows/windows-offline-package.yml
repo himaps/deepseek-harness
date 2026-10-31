@@ -1,0 +1,79 @@
+name: Package · Windows · x64 · offline installer
+
+# Build deepseek-harness-windows-x64-setup.exe: the self-contained dsh CLI runtime
+# (bundled Node.js, pnpm, Python) as an NSIS installer for machines without network
+# access. Windows has no system-package manager to disturb, so there is no dependency
+# closure and no system-component risk; the installer touches only its install directory
+# and one machine PATH entry, both removed by its uninstaller.
+on:
+  push:
+    tags:
+      - 'offline-pkg-v*'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '构建源：仓库分支或 dsh-v* tag；推送 offline-pkg-v* tag 时自动取该 tag'
+        type: string
+        default: master
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-offline-package-${{ inputs.source_ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  # CI runs must never report to the production telemetry endpoint baked
+  # into apps/cli/cordis.yml (AppCLIEntry disables the row when set).
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    name: Build offline installer
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      # pnpm v11 ships no darwin-x64 standalone binary, and the pnpm/action-setup
+      # v6 self-update path needs one; this job stays on the v5 npm-install line.
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: package.json
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The dsh release family refuses to pack from anything but a complete official
+      # build, and this is the same build the npm release ships.
+      - name: Build official artifacts
+        run: pnpm run build:official
+
+      # Packs the dsh and vendor release families, prepares the win-x64 primary runtime,
+      # installs the CLI from the packed tarballs, and compiles installer.nsi with the
+      # runner's NSIS.
+      - name: Build the installer
+        run: |
+          pnpm exec tsx apps/cli/packaging/windows-x64/build-installer.ts `
+            --output dist/win --work dist/win/work --cache dist/win/cache --concurrency 4
+
+      - name: Payload smoke on the build host
+        run: |
+          & "dist/win/work/staging/deepseek-harness/runtime/primary-runtime/dependencies/node/bin/node.exe" `
+            "dist/win/work/staging/deepseek-harness/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" --version
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: deepseek-harness-windows-x64
+          path: dist/win/deepseek-harness-windows-x64-setup.exe
+          if-no-files-found: error

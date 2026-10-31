@@ -1,0 +1,147 @@
+name: Package · Kylin V10 SP1 · aarch64
+
+# Build the deepseek-harness-kylin-v10-sp1-aarch64.deb offline package: a self-contained
+# dsh CLI runtime (bundled Node.js, pnpm, Python) for the Kylin V10 SP1 glibc 2.31
+# baseline. The whole build job runs inside a focal (Ubuntu 20.04) container — the
+# same-source baseline of Kylin V10 SP1 — so every compiled byte is produced against
+# glibc 2.31, and the verify job installs the deb in a same-baseline container that
+# asserts no installed package is upgraded or replaced.
+on:
+  push:
+    tags:
+      - 'offline-pkg-v*'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '构建源：仓库分支或 dsh-v* tag；推送 offline-pkg-v* tag 时自动取该 tag'
+        type: string
+        default: master
+        required: true
+      build_image:
+        description: '构建基线容器（须与 Kylin V10 SP1 同源：focal / Ubuntu 20.04，glibc 2.31）'
+        type: string
+        default: 'ubuntu:20.04'
+        required: true
+      verify_image:
+        description: '离线验证容器（须为 glibc 2.31 同基线；默认 focal 同源）'
+        type: string
+        default: 'ubuntu:20.04'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kylin-package-${{ inputs.source_ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  # CI runs must never report to the production telemetry endpoint baked
+  # into apps/cli/cordis.yml (AppCLIEntry disables the row when set).
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    name: Build offline deb (focal baseline)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    container: ${{ inputs.build_image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The focal base image ships neither git nor a compiler; git must exist before
+      # checkout, and the compiler toolchain builds the native system binaries.
+      - name: Prepare the focal baseline container
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "3";\nAcquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99-dsh-kylin-build
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates build-essential musl-tools
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      # pnpm v11 ships no darwin-x64 standalone binary, and the pnpm/action-setup
+      # v6 self-update path needs one; this job stays on the v5 npm-install line.
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: package.json
+
+      # Node 24's official linux-arm64 build targets glibc 2.28 (RHEL 8), so it runs on
+      # the glibc 2.31 baseline; its dist layout also carries the development headers the
+      # native refit compiles against.
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The dsh release family refuses to pack from anything but a complete official
+      # build, and this is the same build the npm release ships.
+      - name: Build official artifacts
+        run: pnpm run build:official
+
+      # Two stages against the same-source baseline: `refit` recompiles the native system
+      # binaries (static musl Landlock launcher, glibc/musl flock addons) with focal's cc
+      # and musl-gcc, and `fetch-deps` stages the offline dependency closure (git, tmux,
+      # openssh-client trees) from the focal arm64 archive for machines that cannot reach
+      # an archive.
+      - name: Refit native binaries and fetch the offline dependency closure
+        run: bash apps/cli/packaging/linux/kylin-v10-sp1/focal-container.sh refit fetch-deps
+
+      # Packs the dsh and vendor release families plus the closure remainder, prepares the
+      # linux-arm64 primary runtime, installs the CLI from the packed tarballs, gates the
+      # whole payload on the glibc 2.31 / GLIBCXX 3.4.28 symbol baselines, and builds the deb.
+      - name: Build the deb
+        run: |
+          pnpm exec tsx apps/cli/packaging/linux/kylin-v10-sp1/build-deb.ts \
+            --output dist/kylin --work dist/kylin/work --cache dist/kylin/cache --concurrency 4
+
+      # Running the payload on the build baseline itself proves the glibc requirement
+      # before the package ever leaves the machine.
+      - name: Payload smoke on the focal baseline
+        run: |
+          node_bin="dist/kylin/work/debroot/opt/deepseek-harness/runtime/primary-runtime/dependencies/node/bin/node"
+          cli_entry="dist/kylin/work/debroot/opt/deepseek-harness/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          "$node_bin" "$cli_entry" --version
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: deepseek-harness-kylin-v10-sp1-aarch64
+          path: dist/kylin/deepseek-harness-kylin-v10-sp1-aarch64.deb
+          if-no-files-found: error
+
+      # The verify job runs inside a minimal baseline container without git, so the
+      # verification script travels with the artifact it verifies.
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: kylin-verify-script
+          path: apps/cli/packaging/linux/kylin-v10-sp1/verify-deb.sh
+          if-no-files-found: error
+
+  verify:
+    name: Verify on the glibc 2.31 baseline
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    container: ${{ inputs.verify_image }}
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: deepseek-harness-kylin-v10-sp1-aarch64
+          path: dist
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: kylin-verify-script
+          path: scripts
+
+      - name: Install and verify
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          bash scripts/verify-deb.sh dist/deepseek-harness-kylin-v10-sp1-aarch64.deb
