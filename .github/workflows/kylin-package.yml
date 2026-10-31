@@ -187,8 +187,14 @@ jobs:
             sleep 15
           done
           [ "$ok" -eq 1 ] || { echo "::error::the tag release could not be created"; exit 1; }
-          gh release upload "$GITHUB_REF_NAME" \
-            dist/kylin/deepseek-harness-kylin-v10-sp1-aarch64.deb --clobber --repo "$GITHUB_REPOSITORY"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$GITHUB_REF_NAME" \
+              dist/kylin/deepseek-harness-kylin-v10-sp1-aarch64.deb --clobber --repo "$GITHUB_REPOSITORY"; then
+              break
+            fi
+            echo "release upload attempt ${attempt} failed; retrying"
+            sleep 15
+          done
 
       # The verify job runs inside a minimal baseline container without git, so the
       # verification script travels with the artifact it verifies.
