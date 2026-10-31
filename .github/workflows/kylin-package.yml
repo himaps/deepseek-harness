@@ -29,7 +29,8 @@ on:
         required: true
 
 permissions:
-  contents: read
+  # The build attaches its package to the tag's GitHub Release.
+  contents: write
 
 concurrency:
   group: kylin-package-${{ inputs.source_ref || github.ref }}
@@ -153,6 +154,41 @@ jobs:
           name: deepseek-harness-kylin-v10-sp1-aarch64
           path: dist/kylin/deepseek-harness-kylin-v10-sp1-aarch64.deb
           if-no-files-found: error
+
+      # Attach the package to the tag's GitHub Release so offline machines can download
+      # from the release page instead of run artifacts. The release is created on first
+      # use (both platform workflows share it) and the asset is replaced on re-runs.
+      - name: Publish to the tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#offline-pkg-v}"
+          {
+            echo "# DeepSeek Harness offline packages (${GITHUB_REF_NAME})"
+            echo
+            echo '- `deepseek-harness-kylin-v10-sp1-aarch64.deb` — 银河麒麟 V10 SP1 (arm64) 离线安装包：自包含 dsh CLI 运行时（内置 Node.js/pnpm/Python），`dpkg -i` 安装后 `/usr/bin/dsh` 全局可用；git/tmux/openssh-client 依赖闭包已内置，`install-deps.sh` 只装缺失、绝不升级系统组件。'
+            echo '- `deepseek-harness-windows-x64-setup.exe` — Windows x64 离线安装包：NSIS 安装到 `%PROGRAMFILES64%\deepseek-harness` 并写入机器 PATH，卸载器完整还原。'
+            echo
+            echo '两份产物均在 focal（glibc 2.31）同源基线或其验证容器中通过：零升级断言、ldd 零缺失、CLI 冒烟。'
+          } > release-notes.md
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              ok=1
+              break
+            fi
+            if gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "DeepSeek Harness offline packages · ${version}" \
+              --notes-file release-notes.md > /dev/null 2>&1; then
+              ok=1
+              break
+            fi
+            echo "release create attempt ${attempt} failed; retrying"
+            sleep 15
+          done
+          [ "$ok" -eq 1 ] || { echo "::error::the tag release could not be created"; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/kylin/deepseek-harness-kylin-v10-sp1-aarch64.deb --clobber --repo "$GITHUB_REPOSITORY"
 
       # The verify job runs inside a minimal baseline container without git, so the
       # verification script travels with the artifact it verifies.
