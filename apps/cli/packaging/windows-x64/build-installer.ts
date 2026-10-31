@@ -21,10 +21,12 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { releaseFamily } from '../../../../../scripts/release/families.ts'
-import { packFamilyMembers, parsePackConcurrency } from '../../../../../scripts/release/pack.ts'
-import { attempt, capture } from '../../../../../scripts/release/process.ts'
-import { packedIdentity } from '../../../../../scripts/release/tarball.ts'
+import { releaseFamily } from '../../../../scripts/release/families.ts'
+import { packFamilyMembers, parsePackConcurrency } from '../../../../scripts/release/pack.ts'
+import { attempt, capture } from '../../../../scripts/release/process.ts'
+import { packedIdentity } from '../../../../scripts/release/tarball.ts'
+// The imports above are four levels deep from apps/cli/packaging/windows-x64 — one level
+// shallower than the Kylin packaging scripts, which live one directory deeper.
 
 const PACKAGING_DIR = resolve(import.meta.dirname)
 // Walk upward instead of counting levels: the depth from this file to the repository root

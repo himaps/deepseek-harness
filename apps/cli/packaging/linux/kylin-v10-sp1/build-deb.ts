@@ -26,6 +26,7 @@ import { releaseFamily } from '../../../../../scripts/release/families.ts'
 import { packFamilyMembers, parsePackConcurrency } from '../../../../../scripts/release/pack.ts'
 import { capture } from '../../../../../scripts/release/process.ts'
 import { packedIdentity } from '../../../../../scripts/release/tarball.ts'
+// The imports above are five levels deep from apps/cli/packaging/linux/kylin-v10-sp1.
 
 const PACKAGING_DIR = resolve(import.meta.dirname)
 // Walk upward instead of counting levels: the depth from this file to the repository root
@@ -92,25 +93,26 @@ function directoryOption(value: string, label: string): string {
 }
 
 /**
- * Parse one `major.minor` version into comparable numbers.
+ * Parse one symbol version (`major.minor` for GLIBC, `major.minor.patch` for GLIBCXX)
+ * into a comparable zero-padded triple.
  * @param value - Version text.
  * @param label - Argument name for error messages.
- * @returns The numeric pair.
+ * @returns The numeric triple.
  */
-function glibcVersion(value: string, label: string): readonly [number, number] {
+function symbolVersion(value: string, label: string): readonly [number, number, number] {
   const parts = value.split('.').map(part => Number.parseInt(part, 10))
-  if (parts.length !== 2 || parts.some(part => !Number.isSafeInteger(part) || part < 0)) {
-    throw new Error(`kylin deb: ${label} must be major.minor, got ${JSON.stringify(value)}`)
+  if (parts.length < 2 || parts.length > 3 || parts.some(part => !Number.isSafeInteger(part) || part < 0)) {
+    throw new Error(`kylin deb: ${label} must be major.minor[.patch], got ${JSON.stringify(value)}`)
   }
-  return [parts[0] ?? 0, parts[1] ?? 0]
+  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0]
 }
 
 /**
- * Compare two major.minor versions.
+ * Compare two symbol version triples.
  * @returns Negative when `left` is older, zero when equal, positive when newer.
  */
-function compareVersions(left: readonly [number, number], right: readonly [number, number]): number {
-  return (left[0] - right[0]) || (left[1] - right[1])
+function compareVersions(left: readonly [number, number, number], right: readonly [number, number, number]): number {
+  return (left[0] - right[0]) || (left[1] - right[1]) || ((left[2] ?? 0) - (right[2] ?? 0))
 }
 
 /**
@@ -388,16 +390,20 @@ function assembleTree(debRoot: string, sources: {
  */
 function scanTree(debRoot: string): {
   bytes: number
-  maximums: { glibc: readonly [number, number]; glibcxx: readonly [number, number] }
+  maximums: { glibc: readonly [number, number, number]; glibcxx: readonly [number, number, number] }
   violations: string[]
 } {
-  const gates: ReadonlyArray<{ readonly kind: 'GLIBC' | 'GLIBCXX'; readonly limit: readonly [number, number] }> = [
-    { kind: 'GLIBC', limit: glibcVersion(MAX_GLIBC, MAX_GLIBC) },
-    { kind: 'GLIBCXX', limit: glibcVersion(MAX_GLIBCXX, MAX_GLIBCXX) },
+  const gates: ReadonlyArray<{
+    readonly kind: 'GLIBC' | 'GLIBCXX'
+    readonly pattern: string
+    readonly limit: readonly [number, number, number]
+  }> = [
+    { kind: 'GLIBC', pattern: 'GLIBC_([0-9]+\\.[0-9]+)', limit: symbolVersion(MAX_GLIBC, MAX_GLIBC) },
+    { kind: 'GLIBCXX', pattern: 'GLIBCXX_([0-9]+\\.[0-9]+\\.[0-9]+)', limit: symbolVersion(MAX_GLIBCXX, MAX_GLIBCXX) },
   ]
-  const observed = new Map<'GLIBC' | 'GLIBCXX', [number, number]>([
-    ['GLIBC', [0, 0]],
-    ['GLIBCXX', [0, 0]],
+  const observed = new Map<'GLIBC' | 'GLIBCXX', [number, number, number]>([
+    ['GLIBC', [0, 0, 0]],
+    ['GLIBCXX', [0, 0, 0]],
   ])
   const violations: string[] = []
   let bytes = 0
@@ -416,9 +422,9 @@ function scanTree(debRoot: string): {
       if (contents.length < 4 || !contents.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue
       const text = contents.toString('latin1')
       for (const gate of gates) {
-        let best: [number, number] = [0, 0]
-        for (const match of text.matchAll(new RegExp(gate.kind + '_([0-9]+\\.[0-9]+)', 'gu'))) {
-          const version = glibcVersion(match[1] ?? '', gate.kind)
+        let best: [number, number, number] = [0, 0, 0]
+        for (const match of text.matchAll(new RegExp(gate.pattern, 'gu'))) {
+          const version = symbolVersion(match[1] ?? '', gate.kind)
           if (compareVersions(version, best) > 0) best = version
         }
         const seen = observed.get(gate.kind)
@@ -433,7 +439,7 @@ function scanTree(debRoot: string): {
   visit(debRoot)
   return {
     bytes,
-    maximums: { glibc: observed.get('GLIBC') ?? [0, 0], glibcxx: observed.get('GLIBCXX') ?? [0, 0] },
+    maximums: { glibc: observed.get('GLIBC') ?? [0, 0, 0], glibcxx: observed.get('GLIBCXX') ?? [0, 0, 0] },
     violations,
   }
 }
