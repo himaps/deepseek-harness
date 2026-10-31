@@ -7,6 +7,7 @@
  * symbol gate, payload self-check).
  */
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,
@@ -537,7 +538,15 @@ if (import.meta.main) {
   }
 
   capture('dpkg-deb', ['--build', '--root-owner-group', debRoot, debPath])
-  const listing = capture('dpkg-deb', ['-c', debPath])
+  // The file listing of a payload this size exceeds spawnSync's default output buffer.
+  const listingResult = spawnSync('dpkg-deb', ['-c', debPath], {
+    encoding: 'utf8', shell: false, maxBuffer: 1024 * 1024 * 512,
+  })
+  if (listingResult.error !== undefined) throw listingResult.error
+  if (listingResult.status !== 0) {
+    throw new Error('kylin deb: dpkg-deb -c exited with ' + String(listingResult.status ?? 'a signal'))
+  }
+  const listing = listingResult.stdout ?? ''
   for (const required of ['./' + CLI_ENTRY, './' + NODE_BIN, './usr/bin/dsh', './' + DEPS_DIR + '/install-deps.sh']) {
     if (!listing.includes(required)) throw new Error('kylin deb: packed deb omits ' + required)
   }

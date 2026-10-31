@@ -7,6 +7,7 @@
  * that PATH entry. Requires NSIS (`makensis`) on PATH — GitHub's Windows runners ship it.
  */
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   cpSync,
@@ -19,7 +20,8 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { releaseFamily } from '../../../../scripts/release/families.ts'
 import { packFamilyMembers, parsePackConcurrency } from '../../../../scripts/release/pack.ts'
@@ -208,18 +210,35 @@ async function packFamily(familyId: string, destination: string, concurrency: nu
  */
 function packRemaining(names: readonly string[], workspace: Map<string, string>, destination: string): Map<string, PackedPackage> {
   mkdirSync(destination, { recursive: true })
+  const entry = pnpmEntry()
   const staged: string[] = []
   for (const name of names) {
     const directory = workspace.get(name)
     if (directory === undefined) throw new Error(`windows installer: closure member ${name} is not a workspace package`)
     const before = new Set(readdirSync(destination))
-    capture('pnpm', ['--dir', directory, 'pack', '--pack-destination', destination])
+    capture('node', [entry, '--dir', directory, 'pack', '--pack-destination', destination])
     const file = readdirSync(destination).find(candidate => !before.has(candidate))
     if (file === undefined) throw new Error(`windows installer: packing ${name} produced no tarball in ${destination}`)
     staged.push(file)
     console.log(`windows installer: packed ${name}`)
   }
   return indexPacked(destination, staged)
+}
+
+/**
+ * Resolve the workspace-pinned pnpm entry script. Child spawns cannot execute the
+ * `pnpm` shim on Windows without a shell, so the packaged pnpm module runs under the
+ * current Node.js executable instead.
+ * @returns Absolute path of pnpm's `bin/pnpm.cjs`.
+ */
+function pnpmEntry(): string {
+  const manifest = createRequire(import.meta.url).resolve('pnpm/package.json')
+  const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { bin?: unknown }
+  const bin = typeof parsed.bin === 'object' && parsed.bin !== null && !Array.isArray(parsed.bin)
+    ? parsed.bin.pnpm
+    : undefined
+  if (typeof bin !== 'string') throw new Error('windows installer: pnpm has no bin entry')
+  return join(dirname(manifest), bin)
 }
 
 /**
@@ -231,7 +250,7 @@ function packRemaining(names: readonly string[], workspace: Map<string, string>,
  * @param state - Directory owning the pnpm store, cache, and config for this build.
  * @param args - pnpm arguments after the `install` command.
  */
-function runPnpm(project: string, state: string, args: readonly string[]): void {
+function runPnpm(project: string, state: string, args: readonly string[], entry: string): void {
   const config = join(state, 'config')
   mkdirSync(config, { recursive: true })
   writeFileSync(join(config, 'npmrc'), '')
@@ -244,7 +263,7 @@ function runPnpm(project: string, state: string, args: readonly string[]): void 
   environment.npm_config_verify_store_integrity = 'true'
   environment.npm_config_package_import_method = 'copy'
   environment.npm_config_enable_global_virtual_store = 'false'
-  capture('pnpm', ['install', ...args], { cwd: project, env: environment })
+  capture('node', [entry, 'install', ...args], { cwd: project, env: environment })
 }
 
 /**
@@ -298,10 +317,10 @@ function installRuntime(project: string, packed: Map<string, PackedPackage>, ver
   }
   writeFileSync(join(project, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`)
   writeFileSync(join(project, 'pnpm-workspace.yaml'), workspaceFile(overrides))
-  runPnpm(project, state, ['--lockfile-only'])
+  runPnpm(project, state, ['--lockfile-only'], pnpmEntry())
   const lockfile = readFileSync(join(project, 'pnpm-lock.yaml'), 'utf8')
   console.log(`windows installer: runtime lockfile sha256 ${createHash('sha256').update(lockfile).digest('hex')}`)
-  runPnpm(project, state, ['--prod', '--frozen-lockfile', '--trust-lockfile'])
+  runPnpm(project, state, ['--prod', '--frozen-lockfile', '--trust-lockfile'], pnpmEntry())
   if (!existsSync(join(project, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))) {
     throw new Error('windows installer: runtime install produced no CLI entry under node_modules')
   }
@@ -406,7 +425,7 @@ if (import.meta.main) {
     throw new Error('windows installer: primary runtime lock has no win-x64 target')
   }
   const runtimeDir = join(workDir, 'runtime')
-  capture('pnpm', ['exec', 'tsx', 'scripts/primary-runtime/prepare.ts',
+  capture('node', [pnpmEntry(), 'exec', 'tsx', 'scripts/primary-runtime/prepare.ts',
     '--target', 'win-x64', '--output', runtimeDir, '--cache', cacheDir], { cwd: REPOSITORY_ROOT })
 
   const project = join(workDir, 'runtime-project')
