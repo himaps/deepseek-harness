@@ -90,6 +90,12 @@ const rendererConsole = new RendererConsoleTail()
 // set before ready so the first fatal report already resolves under it.
 app.setAppLogsPath()
 
+// Kylin/UOS-class desktops often run without a keyring daemon, and Chromium's safeStorage
+// would then block on a keyring prompt at the first secret. The basic backend keeps
+// safeStorage self-contained (built-in key, weaker at rest) — the accepted trade-off for
+// the offline targets this platform ships to; appended before ready, Linux only.
+if (process.platform === 'linux') app.commandLine.appendSwitch('password-store', 'basic')
+
 function currentDesktopLocale(): ReturnType<typeof resolveDesktopLocale> {
   return resolveDesktopLocale(windowsLanguage ?? app.getLocale())
 }

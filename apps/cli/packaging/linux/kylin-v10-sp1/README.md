@@ -62,3 +62,4 @@ Run the container stages before `build-deb.ts`; run the verify script inside an 
 - The Landlock launcher needs Linux 5.13+ for sandbox enforcement; on older Kylin kernels the harness falls back the same way it does on other platforms.
 - The deb carries one architecture. An x64 target duplicates this directory with `arm64` replaced by `x64` and the same gates.
 - If a payload dependency needs a system package on Kylin, add it to `deps/` from the focal arm64 archive and follow the rules in `deps/README.txt`.
+- This payload has no Chromium component, so the Electron `--password-store=basic` keyring workaround does not apply here; the desktop shell sets it platform-guarded in `apps/desktop/src/main.ts`, and any future Kylin `.desktop` launcher for an Electron build must repeat it on the `Exec=` line.
