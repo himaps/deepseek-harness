@@ -83,9 +83,17 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The dsh release family refuses to pack from anything but a complete official
-      # build, and this is the same build the npm release ships.
+      # build, and this is the same build the npm release ships. Failures tee the log
+      # tail into ::error:: annotations (the anonymous diagnostic channel) and the full
+      # log into an artifact uploaded by the failure step below.
       - name: Build official artifacts
-        run: pnpm run build:official
+        run: |
+          mkdir -p dist/kylin/logs
+          set -o pipefail
+          pnpm run build:official 2>&1 | tee dist/kylin/logs/build-official.log || {
+            tail -n 10 dist/kylin/logs/build-official.log | sed 's/^/::error::/'
+            exit 1
+          }
 
       # Two stages against the same-source baseline: `refit` recompiles the native system
       # binaries (static musl Landlock launcher, glibc/musl flock addons) with focal's cc
@@ -100,8 +108,21 @@ jobs:
       # whole payload on the glibc 2.31 / GLIBCXX 3.4.28 symbol baselines, and builds the deb.
       - name: Build the deb
         run: |
+          set -o pipefail
           pnpm exec tsx apps/cli/packaging/linux/kylin-v10-sp1/build-deb.ts \
-            --output dist/kylin --work dist/kylin/work --cache dist/kylin/cache --concurrency 4
+            --output dist/kylin --work dist/kylin/work --cache dist/kylin/cache --concurrency 4 \
+            2>&1 | tee dist/kylin/logs/build-deb.log || {
+            tail -n 10 dist/kylin/logs/build-deb.log | sed 's/^/::error::/'
+            exit 1
+          }
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: kylin-build-logs
+          path: dist/kylin/logs/*.log
+          if-no-files-found: ignore
 
       # Running the payload on the build baseline itself proves the glibc requirement
       # before the package ever leaves the machine.
