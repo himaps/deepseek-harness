@@ -3,7 +3,9 @@
 ; deepseek-harness payload tree), OUT (installer output path) and VERSION.
 ; The installer copies the self-contained payload into $PROGRAMFILES64\deepseek-harness,
 ; appends the folder to the machine PATH, and registers an uninstaller. It touches no
-; system component beyond the PATH entry and its own directory.
+; system component beyond the PATH entry and its own directory. PATH matching is
+; hand-rolled on NSIS core primitives (StrCpy/StrLen/IntCmp) — no string-library
+; plugins or includes.
 
 Unicode true
 ManifestDPIAware true
@@ -12,12 +14,6 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "WinMessages.nsh"
-!include "StrFunc.nsh"
-; Global-scope calls with dummy arguments install the helpers; the sections below use them.
-${StrContains} $R0 "" ""
-${UnStrContains} $R0 "" ""
-${StrContains}
-${UnStrContains}
 
 !define REG_PATH_KEY "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\deepseek-harness"
@@ -48,14 +44,34 @@ Function BroadcastEnvironment
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 FunctionEnd
 
+; $R0 haystack, $R1 needle -> $R2 zero-based offset of the first occurrence, or -1.
+; Preserves $R0 and $R1.
+Function FindSubstring
+  StrCpy $R2 -1
+  StrLen $R3 $R1
+  IntCmp $R3 0 find_done
+  StrLen $R4 $R0
+  StrCpy $R5 0
+find_loop:
+  IntCmp $R5 $R4 find_done
+  StrCpy $R6 $R0 $R3 $R5
+  StrCmp $R6 $R1 find_found
+  IntOp $R5 $R5 + 1
+  Goto find_loop
+find_found:
+  StrCpy $R2 $R5
+find_done:
+FunctionEnd
+
 Section "Install"
   SetOutPath "$INSTDIR"
   File /r "${STAGE}\deepseek-harness\*.*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   ReadRegStr $R0 HKLM "${REG_PATH_KEY}" "Path"
-  ${StrContains} $R1 "$INSTDIR" "$R0"
-  StrCmp $R1 "" 0 path_done
+  StrCpy $R1 "$INSTDIR"
+  Call FindSubstring
+  IntCmp $R2 -1 0 path_done
   StrCpy $R0 "$R0;$INSTDIR"
   WriteRegExpandStr HKLM "${REG_PATH_KEY}" "Path" "$R0"
   Call BroadcastEnvironment
@@ -69,11 +85,41 @@ path_done:
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
 SectionEnd
 
+; $R0 text in place, $R1 needle — removes every occurrence of the needle. Preserves $R1.
+Function un.RemoveSubstring
+  StrLen $R3 $R1
+  IntCmp $R3 0 remove_done
+remove_loop:
+  StrLen $R4 $R0
+  IntCmp $R4 $R3 remove_done
+  StrCpy $R5 0
+remove_scan:
+  IntCmp $R5 $R4 remove_done
+  StrCpy $R6 $R0 $R3 $R5
+  StrCmp $R6 $R1 remove_splice
+  IntOp $R5 $R5 + 1
+  Goto remove_scan
+remove_splice:
+  StrCpy $R7 $R0 $R5
+  IntOp $R8 $R5 + $R3
+  StrCpy $R9 $R0 "" $R8
+  StrCpy $R0 "$R7$R9"
+  Goto remove_loop
+remove_done:
+FunctionEnd
+
 Section "Uninstall"
   ReadRegStr $R0 HKLM "${REG_PATH_KEY}" "Path"
-  ${UnStrReplace} $R0 ";$INSTDIR" ""
-  ${UnStrReplace} $R0 "$INSTDIR;" ""
-  ${UnStrReplace} $R0 "$INSTDIR" ""
+  ; Delimit both ends so whole-entry matching works, remove ";$INSTDIR;" occurrences,
+  ; then strip the synthetic delimiters again.
+  StrCpy $R0 ";$R0;"
+  StrCpy $R1 ";$INSTDIR;"
+  Call un.RemoveSubstring
+  StrLen $R4 $R0
+  IntCmp $R4 2 strip_done
+  IntOp $R4 $R4 - 2
+  StrCpy $R0 $R0 $R4 1
+strip_done:
   WriteRegExpandStr HKLM "${REG_PATH_KEY}" "Path" "$R0"
   Call un.BroadcastEnvironment
 

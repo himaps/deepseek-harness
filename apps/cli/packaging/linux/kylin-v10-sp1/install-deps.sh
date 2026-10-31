@@ -62,8 +62,9 @@ missing_libs=0
 candidates=$(find "$APP_ROOT" -type f \( -perm -u+x -o -name '*.node' -o -name '*.so' -o -name '*.so.*' \))
 printf '%s\n' "$candidates" | while IFS= read -r binary; do
   [ -n "$binary" ] || continue
-  # musl-linked payload binaries serve musl hosts, never this glibc machine.
-  case "$binary" in */musl/*) continue ;; esac
+  # musl-linked payload binaries serve musl hosts, never this glibc machine, and the
+  # python _tkinter extension expects system Tcl/Tk that a headless CLI never imports.
+  case "$binary" in *musl*|*_tkinter*) continue ;; esac
   report=$(ldd "$binary" 2>&1 || true)
   case "$report" in
     *'not found'*)

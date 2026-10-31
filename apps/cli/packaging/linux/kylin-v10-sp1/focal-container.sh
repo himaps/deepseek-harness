@@ -87,28 +87,41 @@ for stage in "$@"; do
       ;;
 
     fetch-deps)
-      # One --download-only pass resolves each seed's dependency tree against the focal
-      # container's own state, so packages the baseline already has (glibc and friends)
-      # are not downloaded at all; the filter below is the second guard.
-      rm -f /var/cache/apt/archives/*.deb
-      timeout 900 apt-get install -y --download-only $SEEDS
+      # The recursive apt-cache idiom resolves each seed's FULL dependency tree regardless
+      # of what this container happens to have installed — otherwise a container that
+      # already carries libssl1.1 (because git was installed for the checkout) produces a
+      # closure that fails on machines without it. Essential and core system packages are
+      # dropped here, and install-deps.sh enforces the same rule on the target machine.
       mkdir -p "$DEPS_OUT"
+      rm -f "$DEPS_OUT"/*.deb
+      seeds_closure=''
+      for seed in $SEEDS; do
+        closure=$(apt-cache depends --recurse --no-recommends --no-suggests \
+          --no-conflicts --no-breaks --no-replaces --no-enhances "$seed" \
+          | grep -E '^[a-z0-9]' | sort -u)
+        seeds_closure="$seeds_closure $closure"
+      done
+      for package in $seeds_closure; do
+        ( cd "$DEPS_OUT" && apt-get download "$package" ) \
+          || echo "focal: could not download ${package}" >&2
+      done
       count=0
-      for deb in /var/cache/apt/archives/*.deb; do
+      for deb in "$DEPS_OUT"/*.deb; do
         [ -f "$deb" ] || continue
         name=$(dpkg-deb -f "$deb" Package)
         essential=$(dpkg-deb -f "$deb" Essential || true)
         if [ "$essential" = "yes" ]; then
           echo "focal: dropping Essential=yes package ${name}"
+          rm -f "$deb"
           continue
         fi
         case "$name" in
           libc6|libc-bin|locales|systemd*|dbus*|libpam*|udev|login|passwd|libgcc*|libstdc*)
             echo "focal: dropping core system package ${name}"
+            rm -f "$deb"
             continue
             ;;
         esac
-        cp "$deb" "$DEPS_OUT/"
         count=$((count + 1))
       done
       echo "focal: closure staged: ${count} package(s) in ${DEPS_OUT}"
