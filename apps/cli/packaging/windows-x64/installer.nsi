@@ -13,6 +13,9 @@ SetCompressor /SOLID lzma
 !include "x64.nsh"
 !include "WinMessages.nsh"
 !include "StrFunc.nsh"
+; Global-scope calls with dummy arguments install the helpers; the sections below use them.
+${StrContains} $R0 "" ""
+${UnStrContains} $R0 "" ""
 ${StrContains}
 ${UnStrContains}
 
