@@ -27,7 +27,16 @@ import { attempt, capture } from '../../../../../scripts/release/process.ts'
 import { packedIdentity } from '../../../../../scripts/release/tarball.ts'
 
 const PACKAGING_DIR = resolve(import.meta.dirname)
-const REPOSITORY_ROOT = resolve(PACKAGING_DIR, '..', '..', '..', '..')
+// Walk upward instead of counting levels: the depth from this file to the repository root
+// has already been the source of one packaging outage.
+const REPOSITORY_ROOT = (() => {
+  let directory = PACKAGING_DIR
+  for (let depth = 0; depth < 8; depth += 1) {
+    directory = resolve(directory, '..')
+    if (existsSync(join(directory, 'scripts', 'release', 'families.ts'))) return directory
+  }
+  throw new Error('windows installer: repository root with scripts/release/families.ts not found above ' + PACKAGING_DIR)
+})()
 const CLI_ROOT = resolve(REPOSITORY_ROOT, 'apps', 'cli')
 const PRIMARY_RUNTIME_LOCK = resolve(REPOSITORY_ROOT, 'scripts', 'primary-runtime', 'lock.json')
 
@@ -237,6 +246,28 @@ function runPnpm(project: string, state: string, args: readonly string[]): void 
 }
 
 /**
+ * Compose the runtime project's pnpm-workspace.yaml — the only home pnpm 11 reads for
+ * overrides and build approvals — following the Desktop shipped-runtime pattern: the
+ * project includes itself, installs hoisted (no junctions inside the installer payload),
+ * pins every workspace tarball off the registry, and decides each package's build script
+ * explicitly so a CI run never fails on ignored builds and never executes an unreviewed
+ * script.
+ * @param overrides - Tarball overrides keyed by package name.
+ * @returns The workspace file contents.
+ */
+function workspaceFile(overrides: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
+  const overrideSection = entries.length === 0
+    ? ''
+    : `overrides:\n${entries.map(([name, spec]) => `  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`).join('\n')}\n`
+  const coreBuildSpec = overrides['@deepseek-ai/dsh-subprocess-local']
+  const coreBuildKey = coreBuildSpec === undefined
+    ? JSON.stringify('@deepseek-ai/dsh-subprocess-local')
+    : `  ${JSON.stringify('@deepseek-ai/dsh-subprocess-local@' + coreBuildSpec.replace('file:./', 'file:'))}`
+  return `packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n\n${overrideSection}\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n${coreBuildKey}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+}
+
+/**
  * Create the runtime project that installs the CLI from the packed tarballs, then run the
  * two-pass install (lockfile, then production install) exactly like the Desktop runtime.
  * @param project - Directory to create.
@@ -262,9 +293,9 @@ function installRuntime(project: string, packed: Map<string, PackedPackage>, ver
     version,
     type: 'module',
     dependencies: { '@deepseek-ai/dsh': version },
-    pnpm: { overrides },
   }
   writeFileSync(join(project, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`)
+  writeFileSync(join(project, 'pnpm-workspace.yaml'), workspaceFile(overrides))
   runPnpm(project, state, ['--lockfile-only'])
   const lockfile = readFileSync(join(project, 'pnpm-lock.yaml'), 'utf8')
   console.log(`windows installer: runtime lockfile sha256 ${createHash('sha256').update(lockfile).digest('hex')}`)

@@ -58,7 +58,8 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "3";\nAcquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99-dsh-kylin-build
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates build-essential musl-tools
+          # python3 drives node-gyp for the approved native builds (node-pty, koffi).
+          apt-get install -y --no-install-recommends git ca-certificates build-essential musl-tools python3
           # The checkout lives on the host-mounted volume; git inside the container would
           # otherwise refuse it with dubious-ownership (exit 128 on the first rev-parse).
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
